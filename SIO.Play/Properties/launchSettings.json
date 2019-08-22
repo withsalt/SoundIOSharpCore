@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "SIO.Play": {
+      "commandName": "Project",
+      "commandLineArgs": "16k.wav"
+    }
+  }
+}
