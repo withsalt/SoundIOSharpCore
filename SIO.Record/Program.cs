@@ -134,7 +134,7 @@ namespace SIO.Record
             SoundIoBackend backend = SoundIoBackend.None;
             string deviceId = null;
             bool isRaw = true;
-            string outfile = "001.wav";
+            string outfile = "1.pcm";
             SoundIoError err;
 
             for (int i = 0; i < args.Length; i++)
@@ -154,128 +154,130 @@ namespace SIO.Record
                         return Usage(exe);
                 }
                 else if (outfile == null)
+                {
                     outfile = arg;
+                }
                 else
+                {
                     return Usage(exe);
+                }
             }
 
             if (outfile == null)
-                return Usage(exe);
-
-            SoundIO soundIo = new SoundIO();
-
-            err = (backend == SoundIoBackend.None) ?
-                soundIo.Connect() : soundIo.ConnectBackend(backend);
-            if (err != SoundIoError.None)
             {
-                Console.Error.WriteLine("Error connecting: {0}.", err.GetErrorMessage());
-                return 1;
+                return Usage(exe);
             }
 
-            soundIo.FlushEvents();
-
-            SoundIODevice selectedDevice = null;
-            if (deviceId != null)
+            using (SoundIO soundIo = new SoundIO())
             {
-                foreach (var dev in soundIo)
+                err = (backend == SoundIoBackend.None) ? soundIo.Connect() : soundIo.ConnectBackend(backend);
+                if (err != SoundIoError.None)
                 {
-                    if (dev.Aim == SoundIoDeviceAim.Input && dev.Id.Equals(deviceId) && dev.IsRaw == isRaw)
+                    Console.Error.WriteLine("Error connecting: {0}.", err.GetErrorMessage());
+                    return 1;
+                }
+                soundIo.FlushEvents();
+                SoundIODevice selectedDevice = null;
+                if (deviceId != null)
+                {
+                    foreach (var dev in soundIo)
                     {
-                        selectedDevice = dev;
-                        break;
+                        if (dev.Aim == SoundIoDeviceAim.Input && dev.Id.Equals(deviceId) && dev.IsRaw == isRaw)
+                        {
+                            selectedDevice = dev;
+                            break;
+                        }
+                    }
+
+                    if (selectedDevice == null)
+                    {
+                        Console.Error.WriteLine("Invalid device id: {0}.", deviceId);
+                        return 1;
+                    }
+
+                    selectedDevice.AddRef(); // Enumerator cleans up itself on dispose
+                }
+                else
+                {
+                    selectedDevice = soundIo.GetDefaultInputDevice();
+                    if (selectedDevice == null)
+                    {
+                        Console.Error.WriteLine("No input devices available.");
+                        return 1;
                     }
                 }
 
-                if (selectedDevice == null)
+                Console.WriteLine("Device: {0}.", selectedDevice.Name);
+
+                if (selectedDevice.ProbeError != 0)
                 {
-                    Console.Error.WriteLine("Invalid device id: {0}.", deviceId);
+                    Console.Error.WriteLine("Unable to probe device: {0}.", selectedDevice.ProbeError.GetErrorMessage());
                     return 1;
                 }
 
-                selectedDevice.AddRef(); // Enumerator cleans up itself on dispose
-            }
-            else
-            {
-                selectedDevice = soundIo.GetDefaultInputDevice();
-                if (selectedDevice == null)
+                selectedDevice.SortChannelLayouts();
+
+                int sampleRate = prioritizedSampleRates.FirstOrDefault(sr => selectedDevice.SupportsSampleRate(sr));
+                if (sampleRate == 0)
+                    sampleRate = selectedDevice.SampleRates[0].Max;
+
+                SoundIoFormat fmt = prioritizedFormats.FirstOrDefault(f => selectedDevice.SupportsFormat(f));
+                if (fmt == SoundIoFormat.Invalid)
+                    fmt = selectedDevice.Formats[0];
+
+                using (SoundIOInStream instream = new SoundIOInStream(selectedDevice))
                 {
-                    Console.Error.WriteLine("No input devices available.");
-                    return 1;
+                    instream.Format = fmt;
+                    instream.SampleRate = sampleRate;
+                    instream.OnReadCallback = ReadCallback;
+                    instream.OnOverflowCallback = OverflowCallback;
+
+                    err = instream.Open();
+                    if (err != SoundIoError.None)
+                    {
+                        Console.Error.WriteLine("Unable to open input stream: {0}.", err.GetErrorMessage());
+                        return 1;
+                    }
+
+                    Console.WriteLine("{0} {1}Hz {2} interleaved", instream.Layout.Name, sampleRate, fmt.GetFormatString());
+
+                    const int ringBufferDurationSeconds = 30;
+                    int capacity = ringBufferDurationSeconds * instream.SampleRate * instream.BytesPerFrame;
+                    SoundIORingBuffer ringBuffer = new SoundIORingBuffer(soundIo, capacity);
+                    instream.UserData = ringBuffer.Handle;
+                    ringBuffers.Add(ringBuffer.Handle, ringBuffer);
+
+                    err = instream.Start();
+                    if (err != SoundIoError.None)
+                    {
+                        Console.Error.WriteLine("Unable to start input device: {0}.", err.GetErrorMessage());
+                        return 1;
+                    }
+
+                    Console.WriteLine("Recording data for 10 seconds.");
+                    int timeout = 100;
+                    using (var fs = File.OpenWrite(outfile))
+                    {
+                        byte[] buffer = new byte[capacity];
+                        while (true) // No memory allocations allowed
+                        {
+                            soundIo.FlushEvents();
+                            Thread.Sleep(100);
+                            int fillBytes = ringBuffer.FillCount;
+                            IntPtr readBuf = ringBuffer.ReadPointer;
+                            Marshal.Copy(readBuf, buffer, 0, fillBytes);
+                            fs.Write(buffer, 0, fillBytes);
+
+                            ringBuffer.AdvanceReadPointer(fillBytes);
+
+                            if (--timeout <= 0)
+                                break;
+                        }
+                    }
                 }
+                selectedDevice.Release();
+                return 0;
             }
-
-            Console.WriteLine("Device: {0}.", selectedDevice.Name);
-
-            if (selectedDevice.ProbeError != 0)
-            {
-                Console.Error.WriteLine("Unable to probe device: {0}.", selectedDevice.ProbeError.GetErrorMessage());
-                return 1;
-            }
-
-            selectedDevice.SortChannelLayouts();
-
-            int sampleRate = prioritizedSampleRates.FirstOrDefault(sr => selectedDevice.SupportsSampleRate(sr));
-            if (sampleRate == 0)
-                sampleRate = selectedDevice.SampleRates[0].Max;
-
-            SoundIoFormat fmt = prioritizedFormats.FirstOrDefault(f => selectedDevice.SupportsFormat(f));
-            if (fmt == SoundIoFormat.Invalid)
-                fmt = selectedDevice.Formats[0];
-
-            var instream = new SoundIOInStream(selectedDevice);
-            instream.Format = fmt;
-            instream.SampleRate = sampleRate;
-            instream.OnReadCallback = ReadCallback;
-            instream.OnOverflowCallback = OverflowCallback;
-
-            err = instream.Open();
-            if (err != SoundIoError.None)
-            {
-                Console.Error.WriteLine("Unable to open input stream: {0}.", err.GetErrorMessage());
-                return 1;
-            }
-
-            Console.WriteLine("{0} {1}Hz {2} interleaved",
-                instream.Layout.Name, sampleRate, fmt.GetFormatString());
-
-            const int ringBufferDurationSeconds = 30;
-            int capacity = ringBufferDurationSeconds * instream.SampleRate * instream.BytesPerFrame;
-            SoundIORingBuffer ringBuffer = new SoundIORingBuffer(soundIo, capacity);
-            instream.UserData = ringBuffer.Handle;
-            ringBuffers.Add(ringBuffer.Handle, ringBuffer);
-
-            err = instream.Start();
-            if (err != SoundIoError.None)
-            {
-                Console.Error.WriteLine("Unable to start input device: {0}.", err.GetErrorMessage());
-                return 1;
-            }
-
-            Console.WriteLine("Recording data for 10 seconds.");
-            int timeout = 100;
-            using (var fs = File.OpenWrite(outfile))
-            {
-                byte[] buffer = new byte[capacity];
-                while (true) // No memory allocations allowed
-                {
-                    soundIo.FlushEvents();
-                    Thread.Sleep(100);
-                    int fillBytes = ringBuffer.FillCount;
-                    IntPtr readBuf = ringBuffer.ReadPointer;
-                    Marshal.Copy(readBuf, buffer, 0, fillBytes);
-                    fs.Write(buffer, 0, fillBytes);
-
-                    ringBuffer.AdvanceReadPointer(fillBytes);
-
-                    if (--timeout <= 0)
-                        break;
-                }
-            }
-
-            instream.Dispose();
-            selectedDevice.Release();
-            soundIo.Dispose();
-            return 0;
         }
     }
 }
