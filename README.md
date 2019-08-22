@@ -42,7 +42,7 @@ This project is fork from [SoundIOSharp](https://github.com/crojewsk/SoundIOShar
  * libsoundio.dll, Windows x64 WASAPI ([download](https://github.com/joextodd/libsoundio-binaries))
 
 ## How to use
-Copy libsoundio.xx to output lib path. And rename it to libsoundio.dll(You can change the program, too) 
+Copy libsoundio.xx to output lib path. And rename it to libsoundio.dll(You can change the program, too)<br />
 Next, run your program.
 
 With SoundIOSharpCore, sample projects are provided that are based on original samples by andrewrk.
