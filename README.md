@@ -39,7 +39,7 @@ This project is fork from [SoundIOSharp](https://github.com/crojewsk/SoundIOShar
 
  * libsoundio.dylib, MacOS, CoreAudio
  * libsoundio.so, Linux x64 ALSA
- * soundio.dll, Windows x64 WASAPI ([download](https://github.com/joextodd/libsoundio-binaries))
+ * libsoundio.dll, Windows x64 WASAPI ([download](https://github.com/joextodd/libsoundio-binaries))
 
 ## How to use
 Copy libsoundio.xx to output lib path. And rename it to libsoundio.dll(You can change the program, too) 
