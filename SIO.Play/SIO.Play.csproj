@@ -14,4 +14,10 @@
     <ProjectReference Include="..\SoundIOSharpCore\SoundIOSharpCore.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="demo\demo.wav">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
